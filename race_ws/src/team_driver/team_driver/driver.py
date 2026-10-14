@@ -103,7 +103,7 @@ TUNABLES = {
     'fov_deg': 90.0, 'smooth_beams': 5, 'disparity_thresh': 0.5, 'car_half_width': 0.24,
     'bubble_radius': 0.45, 'gap_min_range': 1.5, 'edge_margin_beams': 30,
     'lookahead': 1.5, 'steer_gain': 1.0, 'max_steer': 1.0, 'steer_smooth': 0.0,
-    'front_cone_deg': 8.0, 'brake_dist': 5.0, 'steer_slow': 0.6, 'v_max': 6.0,
+    'front_cone_deg': 8.0, 'brake_dist': 6.0, 'steer_slow': 0.6, 'v_max': 8.0,
     'v_min': 1.0, 'ff_gain': 0.1, 'kp': 0.15, 'ki': 0.05, 'i_max': 1.0,
 }
 
