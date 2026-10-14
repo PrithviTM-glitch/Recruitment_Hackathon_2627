@@ -65,9 +65,11 @@ a scored run, ground-truth pose included. What stays restricted is *publishing*
 """
 
 import math
+import os
 
 import numpy as np
 import rclpy
+import yaml
 from geometry_msgs.msg import Point
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
@@ -96,6 +98,17 @@ def devkit_qos() -> QoSProfile:
     )
 
 
+# Live-tunable: edit config/driver_params.yaml and save, the driver reloads it within 1 s.
+TUNABLES = {
+    'fov_deg': 90.0, 'smooth_beams': 5, 'disparity_thresh': 0.5,
+    'car_half_width': 0.24, 'bubble_radius': 0.45, 'gap_min_range': 1.5,
+    'edge_margin_beams': 30, 'lookahead': 1.5,
+    'steer_gain': 1.0, 'max_steer': 1.0, 'steer_smooth': 0.0,
+    'front_cone_deg': 8.0, 'brake_dist': 5.0, 'steer_slow': 0.7,
+    'v_max': 3.0, 'v_min': 1.0, 'ff_gain': 0.10, 'kp': 0.15, 'ki': 0.05, 'i_max': 1.0,
+}
+
+
 class Driver(Node):
 
     def __init__(self):
@@ -107,9 +120,22 @@ class Driver(Node):
         self.declare_parameter('vehicle_ns', '/autodrive/roboracer_1')
         self.declare_parameter('crawl_throttle', 0.12)    # [-1, 1], open loop
         self.declare_parameter('max_range', 10.0)         # [m] clip the scan here
-
+        self.declare_parameter('params_file', '/hackathon/race_ws/src/team_driver/config/driver_params.yaml')
+        self.declare_parameter('centerline', '/hackathon/maps/icra26_compete_centerline.csv')
+        for k, v in TUNABLES.items():
+            self.declare_parameter(k, v)
         self.crawl_throttle = self.get_parameter('crawl_throttle').value
         self.max_range = self.get_parameter('max_range').value
+        for k in TUNABLES:
+            setattr(self, k, self.get_parameter(k).value)
+        self.params_file = self.get_parameter('params_file').value
+        self.params_mtime = 0.0
+        self.create_timer(1.0, self.reload_params)
+        self.prev_steer = 0.0
+        self.integral = 0.0
+        self.last_t = None
+        self.line = np.loadtxt(self.get_parameter('centerline').value, delimiter=',')
+        self.line_i = None
 
         ns = str(self.get_parameter('vehicle_ns').value).rstrip('/')
         qos = devkit_qos()
@@ -136,6 +162,22 @@ class Driver(Node):
     # ------------------------------------------------------------------
     # Where the car is. Free, accurate, and worth building on.
     # ------------------------------------------------------------------
+    def reload_params(self):
+        """Pick up edits to the yaml file without restarting the node."""
+        try:
+            mtime = os.path.getmtime(self.params_file)
+            if mtime == self.params_mtime:
+                return
+            self.params_mtime = mtime
+            with open(self.params_file) as f:
+                cfg = yaml.safe_load(f)['driver']['ros__parameters']
+            for k, v in cfg.items():
+                if k in TUNABLES:
+                    setattr(self, k, type(TUNABLES[k])(v))
+            self.get_logger().info('reloaded driver_params.yaml')
+        except Exception as e:
+            self.get_logger().warn(f'params reload failed: {e}')
+
     def odom_callback(self, msg):
         self.position = (msg.pose.pose.position.x, msg.pose.pose.position.y)
         q = msg.pose.pose.orientation
@@ -177,24 +219,89 @@ class Driver(Node):
     # THIS IS THE PART YOU WRITE.
     # ==================================================================
     def plan(self, ranges, angles):
-        """Decide what the car should do, given the latest scan.
+        """Follow-the-gap with disparity extension, then a PI speed controller."""
+        m = np.abs(angles) <= math.radians(self.fov_deg)
+        r, a = ranges[m].copy(), angles[m]
+        r = np.convolve(r, np.ones(self.smooth_beams) / self.smooth_beams, mode='same')
+        da = float(np.mean(np.diff(angles)))
 
-        Returns `(steering, throttle)`, both normalised to [-1, 1]. Steering
-        is a fraction of full lock (MAX_STEERING_RAD); throttle is torque, not
-        speed.
+        # Disparity extension: pull the far side of a near/far jump in by the car half width.
+        out = r.copy()
+        for i in np.where(np.abs(np.diff(r)) > self.disparity_thresh)[0]:
+            near, far = (i, i + 1) if r[i] < r[i + 1] else (i + 1, i)
+            n = int(math.atan2(self.car_half_width, max(r[near], 0.1)) / da)
+            lo, hi = (far, min(far + n, len(r))) if far > near else (max(far - n, 0), far + 1)
+            out[lo:hi] = np.minimum(out[lo:hi], r[near])
 
-        Right now it returns "straight ahead, slowly", which is not driving:
-        it ignores `ranges` entirely, so the car will hold its heading off the
-        line and put itself into the first barrier it meets. Replace the whole
-        method.
+        # Safety bubble around the closest return.
+        c = int(np.argmin(out))
+        n = int(math.atan2(self.bubble_radius, max(out[c], 0.1)) / da)
+        out[max(c - n, 0):c + n + 1] = 0.0
 
-        You have more to work with than the scan. `self.position`, `self.yaw`
-        and `self.speed` are ground truth from /odom and are yours to use, and
-        nothing stops you subscribing to more topics, loading a map or a line
-        you computed offline, or running a policy you trained. See
-        docs/04-algorithms.md for the approaches and what each one needs.
-        """
-        return 0.0, self.crawl_throttle
+        # Bearing of the centreline lookahead point, so the car never turns round.
+        target = self.track_bearing()
+
+        # Aim inside the free run nearest that bearing (widest run if pose is unknown).
+        free = np.append(out > self.gap_min_range, False)
+        runs, start = [], None
+        for i, f in enumerate(free):
+            if f and start is None:
+                start = i
+            elif not f and start is not None:
+                runs.append((start, i - 1))
+                start = None
+        if not runs:
+            runs = [(len(out) // 2, len(out) // 2)]
+        if target is None:
+            lo, hi = max(runs, key=lambda r: r[1] - r[0])
+            angle = a[(lo + hi) // 2]
+        else:
+            def dist(r):
+                return max(a[r[0]] - target, target - a[r[1]], 0.0)
+            lo, hi = min(runs, key=dist)
+            angle = float(np.clip(target, a[lo], a[hi]))
+            m_ = self.edge_margin_beams
+            if hi - lo > 2 * m_:
+                angle = float(np.clip(angle, a[lo + m_], a[hi - m_]))
+
+        steering = float(np.clip(self.steer_gain * angle / MAX_STEERING_RAD,
+                                 -self.max_steer, self.max_steer))
+        steering = self.steer_smooth * self.prev_steer + (1 - self.steer_smooth) * steering
+        self.prev_steer = steering
+        front = float(np.min(ranges[np.abs(angles) < math.radians(self.front_cone_deg)]))
+        v_target = (self.v_max * (1 - self.steer_slow * abs(steering))
+                    * min(1.0, front / self.brake_dist))
+        return steering, self.speed_control(max(v_target, self.v_min))
+
+    def track_bearing(self):
+        """Angle in the car frame to the centreline point `lookahead` metres ahead."""
+        if self.position is None:
+            return None
+        d = np.hypot(*(self.line - self.position).T)
+        if self.line_i is None:
+            self.line_i = int(np.argmin(d))
+        else:
+            # Search near the previous index only, so the nearest-point match cannot jump laps.
+            idx = (self.line_i + np.arange(-5, 15)) % len(self.line)
+            self.line_i = int(idx[np.argmin(d[idx])])
+        n = len(self.line)
+        i, acc = self.line_i, 0.0
+        while acc < self.lookahead:
+            acc += float(np.hypot(*(self.line[(i + 1) % n] - self.line[i % n])))
+            i += 1
+        p = self.line[i % n]
+        ang = math.atan2(p[1] - self.position[1], p[0] - self.position[0]) - self.yaw
+        return math.atan2(math.sin(ang), math.cos(ang))
+
+    def speed_control(self, v_target):
+        """Feed-forward + PI with a clamped integral; lift off rather than brake."""
+        now = self.get_clock().now().nanoseconds * 1e-9
+        dt = 0.025 if self.last_t is None else min(now - self.last_t, 0.1)
+        self.last_t = now
+        err = v_target - self.speed
+        self.integral = float(np.clip(self.integral + err * dt, -self.i_max, self.i_max))
+        u = self.ff_gain * v_target + self.kp * err + self.ki * self.integral
+        return float(np.clip(u, 0.0, 1.0))
 
     # ------------------------------------------------------------------
     # Output

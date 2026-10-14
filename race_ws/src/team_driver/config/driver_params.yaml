@@ -1,25 +1,32 @@
-# Your tuning lives here. Loaded with:
-#   ros2 run team_driver driver --ros-args --params-file \
-#       /hackathon/race_ws/src/team_driver/config/driver_params.yaml
-#
-# or in an evaluation run:
-#   ros2 launch roboracer_referee evaluate.launch.py team:=my_team \
-#       driver_params:=/hackathon/race_ws/src/team_driver/config/driver_params.yaml
-#
-# Keeping the numbers out of the code means you can sweep them without
-# rebuilding, which is the fastest way to find lap time early on. Declare a
-# parameter in driver.py and it can be set here.
-#
-# The two below are all the template needs, because the template does not
-# drive (see driver.py). Expect to replace them entirely.
+# Save this file and the running driver reloads it within 1 s (no restart).
+# Comments say which way to push each number.
 
 driver:
   ros__parameters:
-    # AutoDRIVE takes a normalised throttle in [-1, 1], not a target speed.
-    # This one is open loop: the car goes as fast as 0.12 throttle takes it,
-    # which is different on the straight and up against the limit in a corner.
-    # Turning a target speed into a throttle is a control problem you own -
-    # see docs/04-algorithms.md §4.1.
-    crawl_throttle: 0.12
+    # LiDAR gap finding
+    fov_deg: 90.0            # [deg] half-angle of scan used. Smaller ignores side walls.
+    smooth_beams: 5          # beams averaged. Higher is calmer but blurs gaps.
+    disparity_thresh: 0.5    # [m] range jump counted as an edge. Lower sees more edges.
+    car_half_width: 0.24     # [m] margin at edges. Higher = wider berth, tighter gaps close up.
+    bubble_radius: 0.45      # [m] blanked round the closest return. Higher = wider turns.
+    gap_min_range: 1.5       # [m] beams beyond this count as free.
+    edge_margin_beams: 30    # beams kept off a gap's edge (4 beams = 1 deg). Higher = aim more central.
+    lookahead: 1.5           # [m] centreline aim point. Lower hugs the line, higher cuts corners.
 
-    max_range: 10.0           # [m] clip the scan here; the LiDAR reaches 10 m
+    # Steering
+    steer_gain: 1.0          # gap angle to steering. Higher turns in harder and earlier.
+    max_steer: 1.0           # [0-1] cap on steering. Lower it if the car spins.
+    steer_smooth: 0.0        # [0-0.9] low-pass on steering. Higher is smoother but laggy.
+
+    # Target speed
+    v_max: 3.0               # [m/s] top speed on a straight.
+    v_min: 1.0               # [m/s] floor in corners. Higher = brakes less.
+    front_cone_deg: 8.0      # [deg] cone ahead used for wall distance.
+    brake_dist: 5.0          # [m] starts slowing for a wall this far ahead. Lower = brakes later.
+    steer_slow: 0.7          # [0-1] how much steering cuts speed. Lower = slows less in turns.
+
+    # Speed controller (target speed to throttle)
+    ff_gain: 0.10            # throttle per m/s, feed-forward.
+    kp: 0.15                 # proportional on speed error.
+    ki: 0.05                 # integral on speed error.
+    i_max: 1.0               # clamp on the integral.

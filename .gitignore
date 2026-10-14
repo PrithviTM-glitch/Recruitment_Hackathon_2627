@@ -44,3 +44,4 @@ rosbag2_*/
 
 # Written by the CI integrity step if it is ever run inside the checkout
 integrity.txt
+.claude
