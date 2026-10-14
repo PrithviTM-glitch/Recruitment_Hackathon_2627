@@ -100,12 +100,11 @@ def devkit_qos() -> QoSProfile:
 
 # Live-tunable: edit config/driver_params.yaml and save, the driver reloads it within 1 s.
 TUNABLES = {
-    'fov_deg': 90.0, 'smooth_beams': 5, 'disparity_thresh': 0.5,
-    'car_half_width': 0.24, 'bubble_radius': 0.45, 'gap_min_range': 1.5,
-    'edge_margin_beams': 30, 'lookahead': 1.5,
-    'steer_gain': 1.0, 'max_steer': 1.0, 'steer_smooth': 0.0,
-    'front_cone_deg': 8.0, 'brake_dist': 5.0, 'steer_slow': 0.7,
-    'v_max': 3.0, 'v_min': 1.0, 'ff_gain': 0.10, 'kp': 0.15, 'ki': 0.05, 'i_max': 1.0,
+    'fov_deg': 90.0, 'smooth_beams': 5, 'disparity_thresh': 0.5, 'car_half_width': 0.24,
+    'bubble_radius': 0.45, 'gap_min_range': 1.5, 'edge_margin_beams': 30,
+    'lookahead': 1.5, 'steer_gain': 1.0, 'max_steer': 1.0, 'steer_smooth': 0.0,
+    'front_cone_deg': 8.0, 'brake_dist': 5.0, 'steer_slow': 0.6, 'v_max': 6.0,
+    'v_min': 1.0, 'ff_gain': 0.1, 'kp': 0.15, 'ki': 0.05, 'i_max': 1.0,
 }
 
 
@@ -130,6 +129,7 @@ class Driver(Node):
             setattr(self, k, self.get_parameter(k).value)
         self.params_file = self.get_parameter('params_file').value
         self.params_mtime = 0.0
+        self.reload_params()
         self.create_timer(1.0, self.reload_params)
         self.prev_steer = 0.0
         self.integral = 0.0

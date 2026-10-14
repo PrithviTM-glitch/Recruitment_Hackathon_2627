@@ -19,11 +19,11 @@ driver:
     steer_smooth: 0.0        # [0-0.9] low-pass on steering. Higher is smoother but laggy.
 
     # Target speed
-    v_max: 5.0               # [m/s] top speed on a straight.
+    v_max: 6.0               # [m/s] top speed on a straight.
     v_min: 1.0               # [m/s] floor in corners. Higher = brakes less.
     front_cone_deg: 8.0      # [deg] cone ahead used for wall distance.
     brake_dist: 5.0          # [m] starts slowing for a wall this far ahead. Lower = brakes later.
-    steer_slow: 0.7          # [0-1] how much steering cuts speed. Lower = slows less in turns.
+    steer_slow: 0.6          # [0-1] how much steering cuts speed. Lower = slows less in turns.
 
     # Speed controller (target speed to throttle)
     ff_gain: 0.10            # throttle per m/s, feed-forward.
