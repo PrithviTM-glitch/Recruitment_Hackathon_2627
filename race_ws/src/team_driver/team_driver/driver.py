@@ -222,7 +222,7 @@ class Driver(Node):
         """Follow-the-gap with disparity extension, then a PI speed controller."""
         m = np.abs(angles) <= math.radians(self.fov_deg)
         r, a = ranges[m].copy(), angles[m]
-        r = np.convolve(r, np.ones(self.smooth_beams) / self.smooth_beams, mode='same')
+        r = np.convolve(r, np.ones(max(self.smooth_beams, 1)) / max(self.smooth_beams, 1), mode='same')
         da = float(np.mean(np.diff(angles)))
 
         # Disparity extension: pull the far side of a near/far jump in by the car half width.
@@ -270,7 +270,7 @@ class Driver(Node):
         self.prev_steer = steering
         front = float(np.min(ranges[np.abs(angles) < math.radians(self.front_cone_deg)]))
         v_target = (self.v_max * (1 - self.steer_slow * abs(steering))
-                    * min(1.0, front / self.brake_dist))
+                    * min(1.0, front / max(self.brake_dist, 0.1)))
         return steering, self.speed_control(max(v_target, self.v_min))
 
     def track_bearing(self):
